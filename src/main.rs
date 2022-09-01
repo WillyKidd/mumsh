@@ -1,9 +1,15 @@
 use linefeed::{Interface, ReadResult};
+use libc::{signal, SIGTSTP, SIG_IGN};
 
 mod types;
+mod parser;
+mod executor;
 
 fn main() {
-    let reader = match Interface::new("my-application") {
+    unsafe {
+        signal(SIGTSTP, SIG_IGN);
+    }
+    let reader = match Interface::new("mumsh") {
         Ok(x) => x,
         Err(e) => {
             println!("linefeed error {}", e);
@@ -21,6 +27,7 @@ fn main() {
                     println!("bye~");
                     return;
                 }
+                executor::run(&line);
             },
             Ok(ReadResult::Signal(_)) => {
                 println!("received signal");
