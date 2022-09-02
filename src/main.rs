@@ -1,9 +1,12 @@
-use linefeed::{Interface, ReadResult};
+use std::sync::Arc;
+
+use linefeed::{Interface, ReadResult, Command};
 use libc::{signal, SIGTSTP, SIG_IGN};
 
-mod types;
-mod parser;
 mod executor;
+mod input;
+mod parser;
+mod types;
 
 fn main() {
     unsafe {
@@ -17,11 +20,14 @@ fn main() {
         }
     };
     reader.set_prompt("mumsh $ ").unwrap();
+    reader.define_function("input-check", Arc::new(input::InputCheck));
+    reader.bind_sequence("\r", Command::from_str("input-check"));
 
     loop {
 
         match reader.read_line() {
-            Ok(ReadResult::Input(line)) => {
+            Ok(ReadResult::Input(mut line)) => {
+                line = input::remove_multiline_prompt(&line);
                 if line.trim() == "exit" {
                     println!("bye~");
                     return;
