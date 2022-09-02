@@ -1,7 +1,7 @@
 use crate::parser::{self, parse_line::line_to_tokens};
 
 pub fn run(line: &str) {
-    println!("{:?}", parser::parse_line::split_line(line));
+    // println!("{:?}", parser::parse_line::split_line(line));
     let mut status = 0;
     for token in parser::parse_line::split_line(line) {
         if token == "&&" && status != 0 {

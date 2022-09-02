@@ -19,12 +19,14 @@ fn main() {
             return;
         }
     };
-    reader.set_prompt("mumsh $ ").unwrap();
     reader.define_function("input-check", Arc::new(input::InputCheck));
     reader.bind_sequence("\r", Command::from_str("input-check"));
 
     loop {
-
+        match reader.set_prompt("mumsh $ ") {
+            Ok(_) => {},
+            Err(_) => {eprintln!("linefeed: error setting prompt")},
+        }
         match reader.read_line() {
             Ok(ReadResult::Input(mut line)) => {
                 line = input::remove_multiline_prompt(&line);
@@ -42,7 +44,12 @@ fn main() {
                 break;
             },
             Err(e) => {
-                eprintln!("reader error {}", e);
+                eprintln!("\nmumsh: parse error near `{}\'", e);
+                match reader.set_buffer("") {
+                    Ok(_) => {},
+                    Err(_) => {eprintln!("linefeed: error setting buffer")},
+                }
+                continue;
             }
         };
     }

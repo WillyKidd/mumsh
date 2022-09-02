@@ -1,5 +1,9 @@
 use crate::types::LineInfo;
+use std::io::{self, Error, ErrorKind};
 
+/// slit a line into multiple commandlines;
+/// eg: sleep 10 && echo OK
+///     -> ["sleep 10", "&&", "echo OK"]
 pub fn split_line(line: &str) -> Vec<String> {
     let mut cmds = Vec::new();
     let mut token = String::new();
@@ -45,7 +49,10 @@ pub fn split_line(line: &str) -> Vec<String> {
                 token.push(c);
                 token_len = token.len();
                 if token_len - 2 > 0 {
-                    cmds.push(token[0..token_len-2].trim().to_string());
+                    _token = token[0..token_len-2].trim();
+                    if !_token.is_empty() {
+                        cmds.push(_token.to_string());
+                    }
                 }
                 cmds.push(token[token_len-2..token_len].trim().to_string());
                 token.clear();
@@ -67,6 +74,32 @@ pub fn split_line(line: &str) -> Vec<String> {
         cmds.push(_token.to_string());
     }
     cmds
+}
+
+/// check whether split result is valid
+/// invalid: 
+/// consecutive seperators -> Error::InvalidInput
+///     eg: && &&
+/// last seperator is a "&&" or "||" -> Error::Other
+///     eg: ls &&
+///     prompt for multiline input
+pub fn check_split_result(tokens: &Vec<String>) -> io::Result<()> {
+    let mut is_prev_sep = false;
+    let len = tokens.len();
+    for (i, token) in tokens.into_iter().enumerate() {
+        let is_curr_sep = token == "&&" || token == "||" || token == ";";
+        if i == 0 && (token == "&&" || token == "||") {
+            return Err(Error::new(ErrorKind::InvalidInput, String::from(token)));
+        } else if i == len - 1 && (token == "&&" || token == "||") {
+            return Err(Error::new(ErrorKind::Other, String::from(token)));
+        } else {
+            if is_prev_sep && is_curr_sep {
+                return Err(Error::new(ErrorKind::InvalidInput, String::from(token)));
+            }
+        }
+        is_prev_sep = is_curr_sep;
+    }
+    Ok(())
 }
 
 pub fn line_to_tokens(line: &str) -> LineInfo {
