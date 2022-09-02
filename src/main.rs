@@ -22,7 +22,6 @@ fn main() {
 
         match reader.read_line() {
             Ok(ReadResult::Input(line)) => {
-                println!("received {}", line);
                 if line.trim() == "exit" {
                     println!("bye~");
                     return;

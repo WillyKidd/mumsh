@@ -1,10 +1,38 @@
-pub fn line_to_cmds(line: &str) -> Vec<String> {
+use crate::types::LineInfo;
+
+pub fn split_line(line: &str) -> Vec<String> {
     let mut cmds = Vec::new();
     let mut token = String::new();
+    let mut sep_stack = String::new();
     let mut token_len;
+    let mut in_parenthesis = false;
     let mut _token;
     for c in line.chars() {
-        if c == '&' || c == '|' {
+        if c == '\"' || c == '\'' || c == '`' {
+            if in_parenthesis {
+                match sep_stack.chars().last() {
+                    Some(x) => {
+                        if x == c {
+                            sep_stack.pop();
+                        } else {
+                            sep_stack.push(c);
+                            in_parenthesis = true;
+                        }
+                    },
+                    None => {
+                        sep_stack.push(c);
+                        in_parenthesis = true;
+                    }
+                };
+                if sep_stack.is_empty() {
+                    in_parenthesis = false;
+                }
+            } else {
+                sep_stack.push(c);
+                in_parenthesis = true;
+            }
+        }
+        if (c == '&' || c == '|') && !in_parenthesis {
             let token_last;
             match token.chars().last() {
                 Some(x) => token_last = x,
@@ -24,7 +52,7 @@ pub fn line_to_cmds(line: &str) -> Vec<String> {
                 continue;
             }
         }
-        if c == ';' {
+        if c == ';' && !in_parenthesis {
             _token = token.trim();
             if !_token.is_empty() {
                 cmds.push(_token.to_string());
@@ -39,4 +67,130 @@ pub fn line_to_cmds(line: &str) -> Vec<String> {
         cmds.push(_token.to_string());
     }
     cmds
+}
+
+pub fn line_to_tokens(line: &str) -> LineInfo {
+    let mut quote_cnt = 0;
+    let mut met_dollar = false;
+    let mut met_parenthesis = false;
+    let mut met_subshell;
+    let mut token = String::new();
+    let mut _token;
+    let mut sep = String::new();
+    let mut result = Vec::new();
+    for (i, c) in line.chars().enumerate() {
+        // mark met_dollar, indicating whether the last character is $ or not
+        if c == '$' {
+            token.push(c);
+            continue;
+        } else {
+            if i > 1 {
+                match line.chars().nth(i-1) {
+                    Some(x) => {
+                        if x == '$' {
+                            met_dollar = true;
+                        } else {
+                            met_dollar = false;
+                        }
+                    },
+                    None => {
+                        met_dollar = false;
+                    }
+                };
+            }
+        }
+        // quotes
+        if c == '\'' || c == '\"' || c == '`' {
+            let last_sep;
+            match sep.chars().last() {
+                Some(x) => last_sep = x,
+                None => {
+                    quote_cnt += 1;
+                    sep.push(c);
+                    continue;
+                }
+            };
+            if quote_cnt > 0 {
+                if last_sep == c {
+                    sep.pop();
+                    quote_cnt -= 1;
+                    if token.is_empty() {                         // empty patenthesis, ignore
+                        continue;
+                    }
+                    result.push((c.to_string(), token.clone()));  // do not trim
+                    token.clear();
+                    continue;
+                } else {
+                    token.push(c);
+                    continue;
+                }
+            } else {
+                quote_cnt += 1;
+                sep.push(c);
+                continue;
+            }
+        }
+        // parenthesis begin
+        if c == '(' || c == '{' {
+            // check whether is $() or ${}
+            if met_dollar {
+                if met_parenthesis {                      // inside which parenthesis
+                    match sep.chars().last() {
+                        Some(y) => {
+                            if y == '\"' {
+                                met_subshell = true;
+                            } else {
+                                met_subshell = false;
+                            }
+                        },
+                        None => {
+                            met_subshell = true;
+                        }
+                    };
+                } else {
+                    met_subshell = true;
+                }
+            } else {
+                met_subshell = false;
+            }
+            if met_subshell {
+                sep.push(c);
+                token.push(c);
+                met_parenthesis = true;
+                continue;
+            } else {
+                token.push(c);
+                continue;
+            }
+        }
+        // parenthesis end
+        if c == ')' || c == '}' {
+            token.push(c);
+            let last_sep;
+            match sep.chars().last() {
+                Some(x) => last_sep = x,
+                None => continue,
+            };
+            if (last_sep == '(' && c == ')') || (last_sep == '{' && c == '}') {
+                sep.pop();
+                met_parenthesis = false;
+                
+            }
+            continue;
+        }
+        if c.is_whitespace() && quote_cnt == 0 && !met_parenthesis {
+            _token = token.trim();
+            if !_token.is_empty() {
+                result.push((String::new(), _token.to_string()));
+            }
+            token.clear();
+            continue;
+        }
+        token.push(c);
+    }
+    _token = token.trim();
+    if !_token.is_empty() {
+        result.push((String::new(), _token.to_string()));
+    }
+    LineInfo { tokens:result, is_complete:sep.is_empty(), unmatched:sep }
 }
