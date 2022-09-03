@@ -90,8 +90,13 @@ pub fn check_split_result(tokens: &Vec<String>) -> io::Result<()> {
         let is_curr_sep = token == "&&" || token == "||" || token == ";";
         if i == 0 && (token == "&&" || token == "||") {
             return Err(Error::new(ErrorKind::InvalidInput, String::from(token)));
-        } else if i == len - 1 && (token == "&&" || token == "||") {
-            return Err(Error::new(ErrorKind::Other, String::from(token)));
+        } else if i == len - 1 {
+            if token == "&&" || token == "||" {
+                return Err(Error::new(ErrorKind::Other, String::from(token)));
+            }
+            if token.ends_with("<<") {
+                return Err(Error::new(ErrorKind::InvalidInput, String::from("<<")));
+            }
         } else {
             if is_prev_sep && is_curr_sep {
                 return Err(Error::new(ErrorKind::InvalidInput, String::from(token)));
@@ -111,6 +116,8 @@ pub fn line_to_tokens(line: &str) -> LineInfo {
     let mut _token;
     let mut sep = String::new();
     let mut result = Vec::new();
+    let mut is_complete;
+    let mut heredoc_string = String::new();
     for (i, c) in line.chars().enumerate() {
         // mark met_dollar, indicating whether the last character is $ or not
         if c == '$' {
@@ -225,5 +232,28 @@ pub fn line_to_tokens(line: &str) -> LineInfo {
     if !_token.is_empty() {
         result.push((String::new(), _token.to_string()));
     }
-    LineInfo { tokens:result, is_complete:sep.is_empty(), unmatched:sep }
+    // if line complete, check for heredoc <<
+    is_complete = sep.is_empty();
+    if is_complete {
+        for (i, token) in result.iter().enumerate() {
+            if token.1 == "<<" && token.0.is_empty() {
+                let len = result.len();
+                is_complete = false;
+                match result.iter().nth(i+1) {
+                    Some(x) => heredoc_string.push_str(&x.1),
+                    None => is_complete = true
+                };
+                match result.iter().nth(len - 1) {
+                    Some(x) => {
+                        if heredoc_string == x.1 && i+1 != len-1 {
+                            is_complete = true;
+                            heredoc_string.clear();
+                        }
+                    },
+                    None => {}
+                };
+            }
+        }
+    }
+    LineInfo { tokens:result, is_complete:is_complete, here_doc:heredoc_string, unmatched:sep }
 }

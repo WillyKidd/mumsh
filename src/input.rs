@@ -46,16 +46,21 @@ impl<Term: Terminal> Function<Term> for InputCheck {
         } else if count > 0 {
             let mut char_mismatch = ' ';
             complete_prompt = String::new();
-            match parse_result.unmatched.chars().last() {
-                Some(x) => char_mismatch = x,
-                None => {},
-            };
-            match char_mismatch {
-                '\"' | '\'' | '`' => complete_prompt.push_str("dquote> "),
-                '{' => complete_prompt.push_str("braceparam> "),
-                '(' => complete_prompt.push_str("cmdsubst> "),
-                _ => complete_prompt.push_str("> ")
-            };
+            // check heredoc, other wise incomplete quote or braces
+            if !parse_result.here_doc.is_empty() {
+                complete_prompt.push_str("heredoc> ");
+            } else {
+                match parse_result.unmatched.chars().last() {
+                    Some(x) => char_mismatch = x,
+                    None => {},
+                };
+                match char_mismatch {
+                    '\"' | '\'' | '`' => complete_prompt.push_str("dquote> "),
+                    '{' => complete_prompt.push_str("braceparam> "),
+                    '(' => complete_prompt.push_str("cmdsubst> "),
+                    _ => complete_prompt.push_str("> ")
+                };
+            }
             match prompter.insert(count as usize, '\n') {
                 Ok(_) => {},
                 Err(e) => eprintln!("input-check error: {}", e),
@@ -75,6 +80,7 @@ pub fn remove_multiline_prompt(line: &str) -> String {
         .replace("\ncmdsubst> ", "")
         .replace("\ncmdand> ", "")
         .replace("\ncmdor> ", "")
+        .replace("\nheredoc> ", "\n")     // trick: retains \n for heredoc
         .replace("\n> ", "")
         .to_string()
 }
