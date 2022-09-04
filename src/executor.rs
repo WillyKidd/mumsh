@@ -1,4 +1,5 @@
-use crate::parser::{self, parse_line::line_to_tokens};
+use crate::parser;
+use crate::types::CmdlineInfo;
 
 pub fn run(line: &str) {
     // println!("{:?}", parser::parse_line::split_line(line));
@@ -18,9 +19,12 @@ pub fn run(line: &str) {
 }
 
 pub fn run_cmd(cmd: &str) -> i32 {
-    let line_info = line_to_tokens(cmd);
-    println!("{:?}", line_info.tokens);
-    println!("{:?}", line_info.is_complete);
-    println!("{:?}", line_info.unmatched);
+    // let cmdline_info = CmdlineInfo::from(cmd);
+    // let line_info = line_to_tokens(cmd);
+    CmdlineInfo::from(cmd);
+    // println!("{:?}", parser::parse_line::break_line_by_pipe(&line_info.tokens));
+    // println!("{:?}", line_info.tokens);
+    // println!("{:?}", line_info.is_complete);
+    // println!("{:?}", line_info.unmatched);
     0
 }

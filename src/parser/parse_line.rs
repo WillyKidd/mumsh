@@ -1,7 +1,10 @@
-use crate::types::LineInfo;
+use crate::types::{LineInfo, Tokens, Token, CmdInfo, RedirTo};
+
 use std::io::{self, Error, ErrorKind};
+use regex::Regex;
 
 /// slit a line into multiple commandlines;
+/// control operators: & && || ;
 /// eg: sleep 10 && echo OK
 ///     -> ["sleep 10", "&&", "echo OK"]
 pub fn split_line(line: &str) -> Vec<String> {
@@ -9,34 +12,65 @@ pub fn split_line(line: &str) -> Vec<String> {
     let mut token = String::new();
     let mut sep_stack = String::new();
     let mut token_len;
-    let mut in_parenthesis = false;
+    let mut in_quotes = false;
     let mut _token;
-    for c in line.chars() {
+    for (i, c) in line.chars().enumerate() {
+        // quotes
         if c == '\"' || c == '\'' || c == '`' {
-            if in_parenthesis {
+            if in_quotes {
                 match sep_stack.chars().last() {
                     Some(x) => {
                         if x == c {
                             sep_stack.pop();
                         } else {
                             sep_stack.push(c);
-                            in_parenthesis = true;
+                            in_quotes = true;
                         }
                     },
                     None => {
                         sep_stack.push(c);
-                        in_parenthesis = true;
+                        in_quotes = true;
                     }
                 };
                 if sep_stack.is_empty() {
-                    in_parenthesis = false;
+                    in_quotes = false;
                 }
             } else {
                 sep_stack.push(c);
-                in_parenthesis = true;
+                in_quotes = true;
             }
         }
-        if (c == '&' || c == '|') && !in_parenthesis {
+        // &
+        if (c == '&') && !in_quotes {
+            let mut background = true;
+            // >& or &&, not background
+            match line.chars().nth(i-1) {
+                Some(x) => {
+                    if x == '>' || x == '&' {
+                        background = false;
+                    }
+                },
+                None => {},
+            };
+            match line.chars().nth(i+1) {
+                Some(x) => {
+                    if x == '&' {
+                        background = false;
+                    }
+                },
+                None => {},
+            }
+            // otherwise, break the command
+            if background {
+                token.push(' ');    // trick: add a space
+                token.push(c);
+                cmds.push(token);
+                token =  String::new();
+                continue;
+            }
+        }
+        // && ||
+        if (c == '&' || c == '|') && !in_quotes {
             let token_last;
             match token.chars().last() {
                 Some(x) => token_last = x,
@@ -59,7 +93,8 @@ pub fn split_line(line: &str) -> Vec<String> {
                 continue;
             }
         }
-        if c == ';' && !in_parenthesis {
+        // ;
+        if c == ';' && !in_quotes {
             _token = token.trim();
             if !_token.is_empty() {
                 cmds.push(_token.to_string());
@@ -107,6 +142,13 @@ pub fn check_split_result(tokens: &Vec<String>) -> io::Result<()> {
     Ok(())
 }
 
+/// split a line into tokens
+/// eg: echo "11\n22" | wc -l
+///     => [("", "echo"), 
+///         ("\"", "11\n22"),
+///         ("", "|"),
+///         ("", "wc"),
+///         ("", "-l")]
 pub fn line_to_tokens(line: &str) -> LineInfo {
     let mut quote_cnt = 0;
     let mut met_dollar = false;
@@ -218,6 +260,16 @@ pub fn line_to_tokens(line: &str) -> LineInfo {
             }
             continue;
         }
+        // pipe
+        if c == '|' && !met_parenthesis && quote_cnt == 0 {
+            _token = token.trim();
+            if !_token.is_empty() {
+                result.push((String::new(), _token.to_string()));
+            }
+            token.clear();
+            result.push((String::new(), String::from('|')));
+            continue;
+        }
         if c.is_whitespace() && quote_cnt == 0 && !met_parenthesis {
             _token = token.trim();
             if !_token.is_empty() {
@@ -256,4 +308,187 @@ pub fn line_to_tokens(line: &str) -> LineInfo {
         }
     }
     LineInfo { tokens:result, is_complete:is_complete, here_doc:heredoc_string, unmatched:sep }
+}
+
+/// split tokens into many tokens by pipes
+/// eg: echo "11\n22" | wc -l
+///     [("", "echo"), ("\"", "11\n22"), ("", "|"), ("", "wc"), ("", "-l")]
+///         => [[("", "echo"), ("\"", "11\n22")],
+///             [("", "wc"), ("", "-l")]]
+pub fn break_line_by_pipe(tokens: &Tokens) -> Vec<Tokens> {
+    let mut result = Vec::new();
+    let mut temp: Vec<Token> = Vec::new();
+    for token in tokens.iter() {
+        if token.1 == "|" {
+            result.push(temp);  // move temp to result
+            temp = Vec::new();  // construct new temp
+        } else {
+            temp.push((token.0.clone(), token.1.clone()));
+        }
+    }
+    if !temp.is_empty() {
+        result.push(temp);
+    }
+    return result;
+}
+
+/// checks each token and generate CmdInfo, which contains:
+///     tokens: finalized tokens without redirection info
+///     redir_to: a vector of redirect_to information
+///         > >> >& supported
+///     redir_from: TODO
+pub fn tokens_check_redir_to(tokens: &Tokens) -> Result<CmdInfo, String> {
+    let mut tokens_result = Vec::new();
+    let mut redir_to_result = Vec::new();
+    let re_redir_to_fd = Regex::new(r"(\d+|^)>&(\d+|$)").unwrap();
+    let re_redir_append = Regex::new(r"(\d+|^)>>(.*)").unwrap();
+    let re_redir = Regex::new(r"(\d+|^)>(.*)").unwrap();
+    let mut skip_next = false;
+    for (i, token) in tokens.iter().enumerate() {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        let mut is_redir_to_fd = false;
+        let mut is_redir_to = false;
+        let mut redir_to = RedirTo{ redir_type: String::new(), fd_before: -1, fd_after: -1 , file_after: String::new() };
+        if token.0 == "\'" || token.0 == "\"" {
+            continue;
+        }
+        // check if contains >&
+        match re_redir_to_fd.captures(&token.1) {
+            Some(x) => {
+                is_redir_to_fd = true;
+                redir_to.redir_type.push_str(">&");
+                redir_to.fd_before = match x[1].parse() {
+                    Ok(x) => x,
+                    Err(_) => -1
+                };
+                redir_to.fd_after = match x[2].parse() {
+                    Ok(x) => x,
+                    Err(_) => -1
+                };
+            },
+            None => {}
+        };
+        // check whether >& is complete
+        if is_redir_to_fd {
+            if redir_to.fd_before == -1 {                   // fd_before not found, check previous token
+                if i > 0 {
+                    match tokens.iter().nth(i-1) {
+                        Some(x) => {
+                            redir_to.fd_before = match x.1.parse() {
+                                Ok(x) => {
+                                    tokens_result.pop();
+                                    x
+                                },
+                                Err(_) => 1                 // if previous token is not numeric, set to stdout
+                            };
+                        },
+                        None => redir_to.fd_before = 1
+                    };
+                }
+            }
+            if redir_to.fd_after == -1 {                    // fd_after not found, check next token
+                match tokens.iter().nth(i+1) {
+                    Some(x) => {
+                        redir_to.fd_after = match x.1.parse() {
+                            Ok(x) => {
+                                skip_next = true;
+                                x
+                            },
+                            Err(_) => {
+                                return Err(String::from(">&"));
+                            }
+                        };
+                    }
+                    None => {
+                        return Err(String::from(">&"));
+                    }
+                };
+            }
+            // RedirTo constructed
+            redir_to_result.push(redir_to);
+            let token_remaining = String::from(re_redir_to_fd.replace(&token.1, ""));
+            if !token_remaining.is_empty() {
+                tokens_result.push((token.0.clone(), token_remaining));
+            }
+            continue;
+        }
+        // check whether contains >>
+        match re_redir_append.captures(&token.1) {
+            Some(x) => {
+                is_redir_to = true;
+                redir_to.redir_type.push_str(">>");
+                redir_to.fd_before = match x[1].parse() {
+                    Ok(x) => x,
+                    Err(_) => -1
+                };
+                if !&x[2].is_empty() {
+                    redir_to.file_after = String::from(&x[2]);
+                }
+            },
+            None => {}
+        };
+        // check whether contains >
+        if !is_redir_to {
+            match re_redir.captures(&token.1) {
+                Some(x) => {
+                    is_redir_to = true;
+                    redir_to.redir_type.push_str(">");
+                    redir_to.fd_before = match x[1].parse() {
+                        Ok(x) => x,
+                        Err(_) => -1
+                    };
+                    if !&x[2].is_empty() {
+                        redir_to.file_after = String::from(&x[2]);
+                    }
+                },
+                None => {}
+            };
+        }
+        if is_redir_to {
+            if redir_to.fd_before == -1 {
+                if i > 0 {
+                    match tokens.iter().nth(i-1) {
+                        Some(x) => {
+                            redir_to.fd_before = match x.1.parse() {
+                                Ok(x) => {
+                                    tokens_result.pop();
+                                    x
+                                },
+                                Err(_) => 1
+                            };
+                        },
+                        None => redir_to.fd_before = 1
+                    };
+                }
+            }
+            if redir_to.file_after.is_empty() {
+                match tokens.iter().nth(i+1) {
+                    Some(x) => {
+                        redir_to.file_after.push_str(&x.1);
+                        skip_next = true;
+                    }
+                    None => {
+                        return Err(String::from(">"));
+                    }
+                };
+            }
+            // RedirTo constructed
+            let token_remaining;
+            if redir_to.redir_type == ">>" {
+                token_remaining = String::from(re_redir_append.replace(&token.1, ""));
+            } else {
+                token_remaining = String::from(re_redir.replace(&token.1, ""));
+            }
+            if !token_remaining.is_empty() {
+                tokens_result.push((token.0.clone(), token_remaining));
+            }
+            redir_to_result.push(redir_to);
+            continue;
+        }
+        tokens_result.push(token.clone());
+    }
+    Ok( CmdInfo { tokens: tokens_result, redir_from: None, redir_to: Some(redir_to_result) } )  // TODO
 }
