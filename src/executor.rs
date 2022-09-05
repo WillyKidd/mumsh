@@ -3,8 +3,10 @@ use std::ffi::{CString, CStr};
 use crate::parser;
 use crate::types::{CmdlineInfo, CmdInfo};
 
-use nix::unistd::{pipe, fork, execvp, close, getpid, setpgid, ForkResult, Pid, dup2};
+use nix::sys::stat::Mode;
+use nix::unistd::{dup2, pipe, fork, execvp, close, getpid, setpgid, ForkResult, Pid};
 use nix::sys::wait::wait;
+use nix::fcntl::{open, OFlag};
 
 /// run an entire line
 pub fn run(line: &str) {
@@ -74,6 +76,9 @@ pub fn run_cmdline(cmd: &str) -> i32 {
 /// run a single command, without pipes, but with redirections
 pub fn run_single_cmd(cmd_info: &CmdInfo, cmd_num: usize, cmd_idx: usize, pipes: &Vec<(i32, i32)>, pgid: &mut i32) -> i32 {
     // fork
+    let dup_error = "mumsh: error duplicating file descriptor";
+    let close_error = "mumsh: error closing file descriptor";
+    let cstring_error = "mumsh: error creating cstring";
     match unsafe{fork()} {
         Ok(ForkResult::Parent { child, .. }) => {
             return child.as_raw();
@@ -88,36 +93,67 @@ pub fn run_single_cmd(cmd_info: &CmdInfo, cmd_num: usize, cmd_idx: usize, pipes:
                 setpgid(Pid::from_raw(0), Pid::from_raw(*pgid)).expect("Error setting pgid");   // join process
             }
             // setup file descriptors
+            match &cmd_info.redir_to {      // check redir_to
+                Some(vec_redir_to) => {
+                    for redir_to in vec_redir_to {
+                        if redir_to.redir_type == ">&" {
+                            dup2(redir_to.fd_after, redir_to.fd_before).expect(dup_error);
+                        } else if redir_to.redir_type == ">" || redir_to.redir_type == ">>" {
+                            // try to open file
+                            let oflag;
+                            let fd_after;
+                            if redir_to.redir_type == ">" {
+                                oflag = OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_TRUNC;
+                            } else {
+                                oflag = OFlag::O_APPEND | OFlag::O_CREAT | OFlag::O_WRONLY;
+                            }
+                            match open(redir_to.file_after.as_str(), oflag, Mode::S_IRWXU) {
+                                Ok(x) => fd_after = x,
+                                Err(e) => {
+                                    eprintln!("{}", e);
+                                    unsafe { libc::_exit(0) };
+                                }     // TODO: bash style error handling
+                            };
+                            // redirect
+                            dup2(fd_after, redir_to.fd_before).expect(dup_error);
+                            close(fd_after).expect(close_error);
+                        }
+                    }
+                },
+                None => {}
+            };
+            // TODO: redir_from
             for (i, pipe) in pipes.iter().enumerate() {     // close other pipes
                 if cmd_idx > 0 {
                     if i != cmd_idx-1 {
-                        close(pipe.0).expect("Error closing pipe 0");
+                        close(pipe.0).expect(close_error);
                     }
                 } else {
-                    close(pipe.0).expect("Error closing pipe 0");
+                    close(pipe.0).expect(close_error);
                 }
                 if i != cmd_idx {
-                    close(pipe.1).expect("Error closing pipe 1");
+                    close(pipe.1).expect(close_error);
                 }
             }
             if cmd_idx > 0 {    // setup read end of pipe
-                dup2(pipes[cmd_idx-1].0, 0).expect("Error duplicating file descriptor");
-                close(pipes[cmd_idx-1].0).expect("Error closing pipe 0");
+                dup2(pipes[cmd_idx-1].0, 0).expect(dup_error);
+                close(pipes[cmd_idx-1].0).expect(close_error);
             }
             if cmd_idx < cmd_num - 1 {      // setup write end of pipe
-                dup2(pipes[cmd_idx].1, 1).expect("Error duplicating file descriptor");
-                close(pipes[cmd_idx].1).expect("Error closing pipe 0");
+                dup2(pipes[cmd_idx].1, 1).expect(dup_error);
+                close(pipes[cmd_idx].1).expect(close_error);
             }
+            
             // setup execve arguments
-            let c_file = CString::new(cmd_info.tokens[0].1.as_str()).expect("Error creating CString");
+            let c_file = CString::new(cmd_info.tokens[0].1.as_str()).expect(cstring_error);
             let c_arg: Vec<CString> = cmd_info.tokens
                                             .iter()
-                                            .map(|x| CString::new(x.1.as_str()).expect("Error creating CStr"))
+                                            .map(|x| CString::new(x.1.as_str()).expect(cstring_error))
                                             .collect();
             let c_arg_str: Vec<&CStr> = c_arg.iter().map(|x| x.as_c_str()).collect();
             match execvp(&c_file, &c_arg_str) {
                 Ok(_) => {},
-                Err(e) => {eprintln!("{}", e)}
+                Err(e) => {eprintln!("{}", e)}      // TODO: bash style error handling
             };
             unsafe { libc::_exit(0) };
         }
