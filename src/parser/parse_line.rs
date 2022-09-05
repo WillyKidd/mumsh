@@ -490,5 +490,12 @@ pub fn tokens_check_redir_to(tokens: &Tokens) -> Result<CmdInfo, String> {
         }
         tokens_result.push(token.clone());
     }
-    Ok( CmdInfo { tokens: tokens_result, redir_from: None, redir_to: Some(redir_to_result) } )  // TODO
+    let ret_redir_to;
+    // let ret_redir_from;
+    if redir_to_result.is_empty() {
+        ret_redir_to = None;
+    } else {
+        ret_redir_to = Some(redir_to_result);
+    }
+    Ok( CmdInfo { tokens: tokens_result, redir_from: None, redir_to: ret_redir_to } )  // TODO
 }

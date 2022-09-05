@@ -3,7 +3,7 @@ use crate::parser::parse_line;
 pub type Token = (String, String);
 pub type Tokens = Vec<Token>;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RedirTo {
     pub redir_type: String,
     pub fd_before: i32,
@@ -11,11 +11,13 @@ pub struct RedirTo {
     pub file_after: String
 }
 
+#[derive(Debug, Clone)]
 pub struct RedirFrom {
     pub redir_type: String,
     pub fd_after: i32
 }
 
+#[derive(Debug, Clone)]
 pub struct LineInfo {
     pub tokens: Tokens,
     pub is_complete: bool,
@@ -23,12 +25,14 @@ pub struct LineInfo {
     pub unmatched: String
 }
 
+#[derive(Debug, Clone)]
 pub struct CmdInfo {
     pub tokens: Tokens,
     pub redir_from: Option<RedirFrom>,
     pub redir_to: Option<Vec<RedirTo>>
 }
 
+#[derive(Debug, Clone)]
 pub struct CmdlineInfo {
     pub line: String,
     pub cmds: Vec<CmdInfo>,
@@ -48,8 +52,9 @@ impl CmdInfo {
 }
 
 impl CmdlineInfo {
-    pub fn from(line: &str) {
+    pub fn from(line: &str) -> Result<CmdlineInfo, String> {
         let mut is_background = false;
+        let mut cmds = Vec::new();
         let mut lineinfo = parse_line::line_to_tokens(line);
         // TODO: expand $(), ${}, ``...
         // let mut cmds = Vector::new();
@@ -68,10 +73,12 @@ impl CmdlineInfo {
         // split tokens into vector of subtokens, seperated by pipes
         let sub_tokens: Vec<Tokens> = parse_line::break_line_by_pipe(&lineinfo.tokens);
         for sub_token in sub_tokens {
-            let cmd_info = CmdInfo::from(sub_token).unwrap(); // TODO!
-            println!("{:#?}", cmd_info.tokens);
-            println!("{:#?}", cmd_info.redir_to);
+            let cmd_info = match CmdInfo::from(sub_token) {
+                Ok(x) => x,
+                Err(e) => return Err(e)
+            };
+            cmds.push(cmd_info);
         }
-        // for token in
+        Ok(CmdlineInfo { line: String::from(line), cmds: cmds, is_background: is_background })
     }
 }
