@@ -1,10 +1,10 @@
 use std::ffi::{CString, CStr};
 
-use crate::parser;
+use crate::{parser, mumsh::Mumsh};
 use crate::types::{CmdlineInfo, CmdInfo};
 
 use nix::sys::stat::Mode;
-use nix::unistd::{dup2, pipe, fork, execvp, close, getpid, setpgid, ForkResult, Pid};
+use nix::unistd::{dup2, pipe, fork, execvp, close, getpid, setpgid, ForkResult, Pid, getpgid};
 use nix::sys::wait::wait;
 use nix::fcntl::{open, OFlag};
 
@@ -57,9 +57,15 @@ pub fn run_cmdline(cmd: &str) -> i32 {
             }
         };
     }
+    let mut pid_first_child = 0;
     for (i, cmd) in cmdline_info.cmds.iter().enumerate() {
-        run_single_cmd(cmd, cmd_num, i, &vec_pipes, &mut pgid);
+        let pid_child = run_single_cmd(cmd, cmd_num, i, &vec_pipes, &mut pgid);
+        if pid_first_child == 0 {
+            pid_first_child = pid_child;
+        }
     }
+    // donate tty to child
+    Mumsh::set_foreground_pg(pid_first_child);
     // remember to close all unused pipes, otherwise EOF might be missed!
     for pipe in &vec_pipes {
         close(pipe.1).expect("Error closing pipe 1");
@@ -67,6 +73,9 @@ pub fn run_cmdline(cmd: &str) -> i32 {
     for _ in 0..cmd_num {
         wait().unwrap();    // TODO: background?
     }
+    // reclaim tty
+    let pgid = getpgid(Some(Pid::from_raw(0))).expect("Error getting pgid").as_raw();
+    Mumsh::set_foreground_pg(pgid);
     for pipe in &vec_pipes {
         close(pipe.0).expect("Error closing pipe 0");
     }

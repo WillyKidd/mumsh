@@ -1,16 +1,18 @@
 use std::sync::Arc;
 
 use linefeed::{Interface, ReadResult, Command};
-use libc::{signal, SIGTSTP, SIG_IGN};
+use libc::{signal, SIGTSTP, SIGTTOU, SIG_IGN};
 
 mod executor;
 mod input;
 mod parser;
 mod types;
+mod mumsh;
 
 fn main() {
     unsafe {
         signal(SIGTSTP, SIG_IGN);
+        signal(SIGTTOU, SIG_IGN);
     }
     let reader = match Interface::new("mumsh") {
         Ok(x) => x,
