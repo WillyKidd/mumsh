@@ -8,6 +8,8 @@ mod input;
 mod parser;
 mod types;
 mod mumsh;
+mod common;
+mod builtin;
 
 fn main() {
     unsafe {
@@ -24,6 +26,7 @@ fn main() {
     reader.define_function("input-check", Arc::new(input::InputCheck));
     reader.bind_sequence("\r", Command::from_str("input-check"));
 
+    let mut sh = mumsh::Mumsh::new();
     loop {
         match reader.set_prompt("mumsh $ ") {
             Ok(_) => {},
@@ -36,7 +39,7 @@ fn main() {
                     println!("bye~");
                     return;
                 }
-                executor::run(&line);
+                executor::run(&line, &mut sh);
             },
             Ok(ReadResult::Signal(_)) => {
                 println!("received signal");

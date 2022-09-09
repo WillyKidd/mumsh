@@ -1,5 +1,6 @@
 use std::ffi::{CString, CStr};
 
+use crate::builtin;
 use crate::{parser, mumsh::Mumsh};
 use crate::types::{CmdlineInfo, CmdInfo};
 
@@ -8,8 +9,19 @@ use nix::unistd::{dup2, pipe, fork, execvp, close, getpid, setpgid, ForkResult, 
 use nix::sys::wait::wait;
 use nix::fcntl::{open, OFlag};
 
+pub fn try_run_builtin(cmd_info: &mut CmdInfo, sh: &mut Mumsh) -> Option<i32> {
+    let token_first = match cmd_info.tokens.first() {
+        Some(x) => x,
+        None => return None
+    };
+    if token_first.1 == "cd" {
+        return Some(builtin::cd::run(cmd_info, sh));
+    }
+    None
+}
+
 /// run an entire line
-pub fn run(line: &str) {
+pub fn run(line: &str, sh: &mut Mumsh) {
     // println!("{:?}", parser::parse_line::split_line(line));
     let mut status = 0;
     for token in parser::parse_line::split_line(line) {
@@ -22,29 +34,20 @@ pub fn run(line: &str) {
         if token == "||" || token == "&&" || token == ";" {
             continue;
         }
-        status = run_cmdline(&token);
+        status = run_cmdline(&token, sh);
     }
 }
 
 /// run a sigle commandline that contains pipes
-pub fn run_cmdline(cmd: &str) -> i32 {
-    // let cmdline_info = CmdlineInfo::from(cmd);
-    // let line_info = line_to_tokens(cmd);
-    let cmdline_info = match CmdlineInfo::from(cmd) {
+pub fn run_cmdline(cmd: &str, sh: &mut Mumsh) -> i32 {
+    let mut cmdline_info = match CmdlineInfo::from(cmd) {
         Ok(x) => x,
         Err(e) => {
             eprintln!("mumsh: {}", e);
             return -1;      // TODO: what to return?
         }
     };
-    // println!("{:#?}", cmdline_info);
     let cmd_num = cmdline_info.cmds.len();
-
-    // println!("{:?}", parser::parse_line::break_line_by_pipe(&line_info.tokens));
-    // println!("{:?}", line_info.tokens);
-    // println!("{:?}", line_info.is_complete);
-    // println!("{:?}", line_info.unmatched);
-
     // parent: create all pipes and store in vec_pipes: pipe[0] read, pipe[1] write
     let mut vec_pipes = Vec::new();
     let mut pgid = 0;
@@ -58,24 +61,32 @@ pub fn run_cmdline(cmd: &str) -> i32 {
         };
     }
     let mut pid_first_child = 0;
-    for (i, cmd) in cmdline_info.cmds.iter().enumerate() {
-        let pid_child = run_single_cmd(cmd, cmd_num, i, &vec_pipes, &mut pgid);
+    let mut cmds_to_wait = 0;
+    for (i, cmd) in cmdline_info.cmds.iter_mut().enumerate() {
+        let pid_child = run_single_cmd(cmd, cmd_num, i, &vec_pipes, sh, &mut pgid);
         if pid_first_child == 0 {
             pid_first_child = pid_child;
         }
+        if pid_child > 0 {
+            cmds_to_wait += 1;
+        }
     }
     // donate tty to child
-    Mumsh::set_foreground_pg(pid_first_child);
+    if pid_first_child != 0 {
+        Mumsh::set_foreground_pg(pid_first_child);
+    }
     // remember to close all unused pipes, otherwise EOF might be missed!
     for pipe in &vec_pipes {
         close(pipe.1).expect("Error closing pipe 1");
     }
-    for _ in 0..cmd_num {
-        wait().unwrap();    // TODO: background?
+    for _ in 0..cmds_to_wait {
+        wait().unwrap();    // TODO: background? unwrap panic?
     }
     // reclaim tty
-    let pgid = getpgid(Some(Pid::from_raw(0))).expect("Error getting pgid").as_raw();
-    Mumsh::set_foreground_pg(pgid);
+    if pid_first_child != 0 {
+        let pgid = getpgid(Some(Pid::from_raw(0))).expect("Error getting pgid").as_raw();
+        Mumsh::set_foreground_pg(pgid);
+    }
     for pipe in &vec_pipes {
         close(pipe.0).expect("Error closing pipe 0");
     }
@@ -83,11 +94,15 @@ pub fn run_cmdline(cmd: &str) -> i32 {
 }
 
 /// run a single command, without pipes, but with redirections
-pub fn run_single_cmd(cmd_info: &CmdInfo, cmd_num: usize, cmd_idx: usize, pipes: &Vec<(i32, i32)>, pgid: &mut i32) -> i32 {
+pub fn run_single_cmd(cmd_info: &mut CmdInfo, cmd_num: usize, cmd_idx: usize, pipes: &Vec<(i32, i32)>, sh: &mut Mumsh, pgid: &mut i32) -> i32 {
     // fork
     let dup_error = "mumsh: error duplicating file descriptor";
     let close_error = "mumsh: error closing file descriptor";
     let cstring_error = "mumsh: error creating cstring";
+    // check if builtin, return 0 if builtin
+    if let Some(_) = try_run_builtin(cmd_info, sh) {
+        return 0;
+    }
     match unsafe{fork()} {
         Ok(ForkResult::Parent { child, .. }) => {
             return child.as_raw();
