@@ -17,6 +17,11 @@ pub fn try_run_builtin(cmd_info: &mut CmdInfo, sh: &mut Mumsh) -> Option<i32> {
     if token_first.1 == "cd" {
         return Some(builtin::cd::run(cmd_info, sh));
     }
+    if token_first.1 == "which" {
+        if builtin::which::run(cmd_info, sh) == 0 {
+            return Some(0);
+        }
+    }
     None
 }
 
