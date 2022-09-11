@@ -119,6 +119,7 @@ pub fn run_single_cmd(cmd_info: &mut CmdInfo, cmd_num: usize, cmd_idx: usize, pi
         Ok(ForkResult::Child) => {
             // Unsafe to use `println!` (or `unwrap`) here. See Safety.
             unsafe {
+                libc::signal(libc::SIGINT, libc::SIG_DFL);
                 libc::signal(libc::SIGTSTP, libc::SIG_DFL);
                 libc::signal(libc::SIGQUIT, libc::SIG_DFL);
                 libc::signal(libc::SIGTTOU,libc::SIG_DFL);

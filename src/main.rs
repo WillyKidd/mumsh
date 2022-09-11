@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use colored::{self, Colorize};
 use linefeed::{Interface, ReadResult, Command};
 use libc;
 use nix::{unistd::{isatty, tcgetpgrp, getpgrp, Pid, getpid, setpgid}, sys::signal::kill};
@@ -56,8 +57,12 @@ fn main() {
         reader.define_function("input-check", Arc::new(input::InputCheck));
         reader.bind_sequence("\r", Command::from_str("input-check"));
 
+        let mut prompt = " mumsh $ ".on_truecolor(10, 122, 60).truecolor(255, 255, 255).bold().to_string();
+        prompt.push_str(&"".truecolor(10, 122, 60).bold().to_string());
+        prompt.push(' ');
+
         loop {
-            match reader.set_prompt("mumsh $ ") {
+            match reader.set_prompt(&prompt) {
                 Ok(_) => {},
                 Err(_) => {eprintln!("linefeed: error setting prompt")},
             }
