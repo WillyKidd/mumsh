@@ -27,7 +27,6 @@ pub fn try_run_builtin(cmd_info: &mut CmdInfo, sh: &mut Mumsh) -> Option<i32> {
 
 /// run an entire line
 pub fn run(line: &str, sh: &mut Mumsh) {
-    // println!("{:?}", parser::parse_line::split_line(line));
     let mut status = 0;
     for token in parser::parse_line::split_line(line) {
         if token == "&&" && status != 0 {
@@ -72,14 +71,19 @@ pub fn run_cmdline(cmd: &str, sh: &mut Mumsh) -> i32 {
         if pid_first_child == 0 {
             pid_first_child = pid_child;
         }
-        if pid_child > 0 {
+        if pid_child > 0 && !cmdline_info.is_background {
             cmds_to_wait += 1;
+        }
+        if cmdline_info.is_background {
+            sh.insert_job(pid_first_child, pid_child);
         }
     }
     // donate tty to child
-    if pid_first_child != 0 {
-        Mumsh::set_foreground_pg(pid_first_child);
+    if pid_first_child != 0 && !cmdline_info.is_background {
+        sh.set_foreground_pg(pid_first_child);
     }
+    // background
+    sh.print_job(pid_first_child);
     // remember to close all unused pipes, otherwise EOF might be missed!
     for pipe in &vec_pipes {
         close(pipe.1).expect("Error closing pipe 1");
@@ -88,9 +92,9 @@ pub fn run_cmdline(cmd: &str, sh: &mut Mumsh) -> i32 {
         wait().unwrap();    // TODO: background? unwrap panic?
     }
     // reclaim tty
-    if pid_first_child != 0 {
+    if pid_first_child != 0 && !cmdline_info.is_background {
         let pgid = getpgid(Some(Pid::from_raw(0))).expect("Error getting pgid").as_raw();
-        Mumsh::set_foreground_pg(pgid);
+        sh.set_foreground_pg(pgid);
     }
     for pipe in &vec_pipes {
         close(pipe.0).expect("Error closing pipe 0");
@@ -114,6 +118,12 @@ pub fn run_single_cmd(cmd_info: &mut CmdInfo, cmd_num: usize, cmd_idx: usize, pi
         }
         Ok(ForkResult::Child) => {
             // Unsafe to use `println!` (or `unwrap`) here. See Safety.
+            unsafe {
+                libc::signal(libc::SIGTSTP, libc::SIG_DFL);
+                libc::signal(libc::SIGQUIT, libc::SIG_DFL);
+                libc::signal(libc::SIGTTOU,libc::SIG_DFL);
+                libc::signal(libc::SIGTTIN,libc::SIG_DFL);
+            }
             // setup pgid
             if cmd_idx == 0 {
                 setpgid(Pid::from_raw(0), getpid()).expect("Error setting pgid");       // setup new process group
@@ -180,24 +190,27 @@ pub fn run_single_cmd(cmd_info: &mut CmdInfo, cmd_num: usize, cmd_idx: usize, pi
                                             .map(|x| CString::new(x.1.as_str()).expect(cstring_error))
                                             .collect();
             let c_arg_str: Vec<&CStr> = c_arg.iter().map(|x| x.as_c_str()).collect();
-            match execvp(&c_file, &c_arg_str) {
-                Ok(_) => {},
-                Err(e) => match e {
-                    nix::Error::ENOEXEC => {
-                        eprintln!("mumsh: exec format error: {}", cmd_info.tokens[0].1.as_str());
-                    }
-                    nix::Error::ENOENT => {
-                        eprintln!("mumsh: no such file or directory: {}", cmd_info.tokens[0].1.as_str());
-                    }
-                    nix::Error::EACCES => {
-                        eprintln!("mumsh: permission denied: {}", cmd_info.tokens[0].1.as_str());
-                    }
-                    _ => {
-                        eprintln!("mumsh: {}: {:?}", cmd_info.tokens[0].1.as_str(), e);
-                    }
+            let exit_status = match execvp(&c_file, &c_arg_str) {
+                Ok(_) => 0,
+                Err(e) => {
+                    match e {
+                        nix::Error::ENOEXEC => {
+                            eprintln!("mumsh: exec format error: {}", cmd_info.tokens[0].1.as_str());
+                        }
+                        nix::Error::ENOENT => {
+                            eprintln!("mumsh: no such file or directory: {}", cmd_info.tokens[0].1.as_str());
+                        }
+                        nix::Error::EACCES => {
+                            eprintln!("mumsh: permission denied: {}", cmd_info.tokens[0].1.as_str());
+                        }
+                        _ => {
+                            eprintln!("mumsh: {}: {:?}", cmd_info.tokens[0].1.as_str(), e);
+                        }
+                    };
+                    e as i32
                 },
             };
-            unsafe { libc::_exit(0) };
+            unsafe { libc::_exit(exit_status) };
         }
         Err(_) => {
             println!("Fork failed");

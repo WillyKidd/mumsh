@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use linefeed::{Interface, ReadResult, Command};
-use libc::{signal, SIGINT, SIGQUIT, SIGTSTP, SIGTTIN, SIGTTOU, SIG_IGN};
+use libc;
 use nix::{unistd::{isatty, tcgetpgrp, getpgrp, Pid, getpid, setpgid}, sys::signal::kill};
 
 mod executor;
@@ -13,6 +13,7 @@ mod common;
 mod builtin;
 
 fn main() {
+    let mut sh = mumsh::Mumsh::new();
     let shell_is_interactive;
     let mut shell_pgid = getpgrp();
     match isatty(1) {
@@ -29,12 +30,11 @@ fn main() {
         }
         // ignore iteractive and job-control signals
         unsafe {
-            signal (SIGINT, SIG_IGN);
-            signal (SIGQUIT, SIG_IGN);
-            signal (SIGTSTP, SIG_IGN);
-            signal (SIGTTIN, SIG_IGN);
-            signal (SIGTTOU, SIG_IGN);
-            // signal (SIGCHLD, SIG_IGN);
+            libc::signal(libc::SIGINT, libc::SIG_IGN);
+            libc::signal(libc::SIGQUIT,libc::SIG_IGN);
+            libc::signal(libc::SIGTSTP,libc::SIG_IGN);
+            libc::signal(libc::SIGTTIN,libc::SIG_IGN);
+            libc::signal(libc::SIGTTOU,libc::SIG_IGN);
         }
         // put mumsh in her own process group
         shell_pgid = getpid();
@@ -45,7 +45,7 @@ fn main() {
                 return;
             }
         };
-        mumsh::Mumsh::set_foreground_pg(shell_pgid.as_raw());
+        sh.set_foreground_pg(shell_pgid.as_raw());
         let reader = match Interface::new("mumsh") {
             Ok(x) => x,
             Err(e) => {
@@ -56,12 +56,12 @@ fn main() {
         reader.define_function("input-check", Arc::new(input::InputCheck));
         reader.bind_sequence("\r", Command::from_str("input-check"));
 
-        let mut sh = mumsh::Mumsh::new();
         loop {
             match reader.set_prompt("mumsh $ ") {
                 Ok(_) => {},
                 Err(_) => {eprintln!("linefeed: error setting prompt")},
             }
+            sh.try_wait_bg_jobs();
             match reader.read_line() {
                 Ok(ReadResult::Input(mut line)) => {
                     line = input::remove_multiline_prompt(&line);
@@ -70,6 +70,16 @@ fn main() {
                         return;
                     }
                     executor::run(&line, &mut sh);
+                    // TODO: try wait 1000 times...
+                    let mut i = 0;
+                    loop {
+                        sh.try_wait_bg_jobs();
+                        i += 1;
+                        if i == 1000 {
+                            break;
+                        }
+                    }
+
                 },
                 Ok(ReadResult::Signal(_)) => {
                     println!("received signal");
