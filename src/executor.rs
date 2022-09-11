@@ -182,7 +182,20 @@ pub fn run_single_cmd(cmd_info: &mut CmdInfo, cmd_num: usize, cmd_idx: usize, pi
             let c_arg_str: Vec<&CStr> = c_arg.iter().map(|x| x.as_c_str()).collect();
             match execvp(&c_file, &c_arg_str) {
                 Ok(_) => {},
-                Err(e) => {eprintln!("{}", e)}      // TODO: bash style error handling
+                Err(e) => match e {
+                    nix::Error::ENOEXEC => {
+                        eprintln!("mumsh: exec format error: {}", cmd_info.tokens[0].1.as_str());
+                    }
+                    nix::Error::ENOENT => {
+                        eprintln!("mumsh: no such file or directory: {}", cmd_info.tokens[0].1.as_str());
+                    }
+                    nix::Error::EACCES => {
+                        eprintln!("mumsh: permission denied: {}", cmd_info.tokens[0].1.as_str());
+                    }
+                    _ => {
+                        eprintln!("mumsh: {}: {:?}", cmd_info.tokens[0].1.as_str(), e);
+                    }
+                },
             };
             unsafe { libc::_exit(0) };
         }
