@@ -340,9 +340,9 @@ pub fn break_line_by_pipe(tokens: &Tokens) -> Vec<Tokens> {
 pub fn tokens_check_redir_to(tokens: &Tokens) -> Result<CmdInfo, String> {
     let mut tokens_result = Vec::new();
     let mut redir_to_result = Vec::new();
-    let re_redir_to_fd = Regex::new(r"(\d+|^)>&(\d+|$)").unwrap();
-    let re_redir_append = Regex::new(r"(\d+|^)>>(.*)").unwrap();
-    let re_redir = Regex::new(r"(\d+|^)>(.*)").unwrap();
+    let re_redir_to_fd = Regex::new(r"(^[1-9]|^)>&([1-9]|$)").unwrap();
+    let re_redir_append = Regex::new(r"(^[1-9]|^)?>>(.*)").unwrap();
+    let re_redir = Regex::new(r"(^[1-9]|^)?>(.*)").unwrap();
     let mut skip_next = false;
     for (i, token) in tokens.iter().enumerate() {
         if skip_next {
@@ -436,9 +436,12 @@ pub fn tokens_check_redir_to(tokens: &Tokens) -> Result<CmdInfo, String> {
                 Some(x) => {
                     is_redir_to = true;
                     redir_to.redir_type.push_str(">");
-                    redir_to.fd_before = match x[1].parse() {
-                        Ok(x) => x,
-                        Err(_) => -1
+                    match x.get(1) {
+                        Some(x) => match x.as_str().parse() {
+                            Ok(y) => redir_to.fd_before = y,
+                            Err(_) => redir_to.fd_before = -1,
+                        },
+                        None => redir_to.fd_before = -1
                     };
                     if !&x[2].is_empty() {
                         redir_to.file_after = String::from(&x[2]);
@@ -449,6 +452,7 @@ pub fn tokens_check_redir_to(tokens: &Tokens) -> Result<CmdInfo, String> {
         }
         if is_redir_to {
             if redir_to.fd_before == -1 {
+                redir_to.fd_before = 1;
                 if i > 0 {
                     match tokens.iter().nth(i-1) {
                         Some(x) => {
