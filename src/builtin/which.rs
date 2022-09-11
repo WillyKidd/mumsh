@@ -13,8 +13,8 @@ pub fn run(cmd_info: &mut CmdInfo, _sh: &mut Mumsh) -> i32 {
             to_delete.push(i+1);
         }
     }
-    for idx in &to_delete {
-        cmd_info.tokens.remove(*idx);
+    for (i, idx) in to_delete.iter().enumerate() {
+        cmd_info.tokens.remove(*idx-i);
     }
     if to_delete.len() != len - 1 {
         return -1;
