@@ -4,6 +4,7 @@ use colored::{self, Colorize};
 use linefeed::{Interface, ReadResult, Command};
 use libc;
 use nix::{unistd::{isatty, tcgetpgrp, getpgrp, Pid, getpid, setpgid}, sys::signal::kill};
+use termios::{*, os::linux::ECHOCTL};
 
 mod executor;
 mod input;
@@ -60,6 +61,10 @@ fn main() {
         let mut prompt = " mumsh $ ".on_truecolor(10, 122, 60).truecolor(255, 255, 255).bold().to_string();
         prompt.push_str(&"".truecolor(10, 122, 60).bold().to_string());
         prompt.push(' ');
+
+        let mut attr = Termios::from_fd(0).unwrap();
+        attr.c_lflag &= !ECHOCTL;
+        tcsetattr(0, TCSANOW, &mut attr).unwrap();
 
         loop {
             match reader.set_prompt(&prompt) {

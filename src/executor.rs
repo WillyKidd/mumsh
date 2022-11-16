@@ -54,7 +54,6 @@ pub fn run_cmdline(cmd: &str, sh: &mut Mumsh) -> i32 {
     let cmd_num = cmdline_info.cmds.len();
     // parent: create all pipes and store in vec_pipes: pipe[0] read, pipe[1] write
     let mut vec_pipes = Vec::new();
-    let mut pgid = 0;
     for _ in 0..cmd_num-1 {
         match pipe() {
             Ok(x) => vec_pipes.push(x),
@@ -67,7 +66,7 @@ pub fn run_cmdline(cmd: &str, sh: &mut Mumsh) -> i32 {
     let mut pid_first_child = 0;
     let mut cmds_to_wait = 0;
     for (i, cmd) in cmdline_info.cmds.iter_mut().enumerate() {
-        let pid_child = run_single_cmd(cmd, cmd_num, i, &vec_pipes, sh, &mut pgid);
+        let pid_child = run_single_cmd(cmd, cmd_num, i, &vec_pipes, sh, pid_first_child);
         if pid_first_child == 0 {
             pid_first_child = pid_child;
         }
@@ -103,7 +102,7 @@ pub fn run_cmdline(cmd: &str, sh: &mut Mumsh) -> i32 {
 }
 
 /// run a single command, without pipes, but with redirections
-pub fn run_single_cmd(cmd_info: &mut CmdInfo, cmd_num: usize, cmd_idx: usize, pipes: &Vec<(i32, i32)>, sh: &mut Mumsh, pgid: &mut i32) -> i32 {
+pub fn run_single_cmd(cmd_info: &mut CmdInfo, cmd_num: usize, cmd_idx: usize, pipes: &Vec<(i32, i32)>, sh: &mut Mumsh, pgid: i32) -> i32 {
     // fork
     let dup_error = "mumsh: error duplicating file descriptor";
     let close_error = "mumsh: error closing file descriptor";
@@ -128,9 +127,8 @@ pub fn run_single_cmd(cmd_info: &mut CmdInfo, cmd_num: usize, cmd_idx: usize, pi
             // setup pgid
             if cmd_idx == 0 {
                 setpgid(Pid::from_raw(0), getpid()).expect("Error setting pgid");       // setup new process group
-                *pgid = getpid().as_raw();
             } else {
-                setpgid(Pid::from_raw(0), Pid::from_raw(*pgid)).expect("Error setting pgid");   // join process
+                setpgid(getpid(), Pid::from_raw(pgid)).expect("Error setting pgid");   // join process
             }
             // setup file descriptors
             match &cmd_info.redir_to {      // check redir_to
